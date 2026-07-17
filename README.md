@@ -1,4 +1,4 @@
-# DermaBSA 🩺
+# DermaBSA 
 
 **DermaBSA** è un'applicazione mobile sviluppata in Flutter per il calcolo preciso e intuitivo della **Body Surface Area (BSA)** affetta da lesioni psoriasiche.
 
@@ -34,7 +34,7 @@ Le componenti centrali dell'applicazione sono organizzate come segue:
 * `lib/models/body_region.dart`: Enum con la definizione precisa di tutte le parti del corpo e i relativi pesi percentuali standardizzati.
 * `assets/images/`: Contiene tutte le sagome anatomiche (fronte, retro) e i file PNG ritagliati per le singole maschere di pittura.
 
-## 🚀 Come avviare il progetto
+##  Come avviare il progetto
 
 ### Prerequisiti
 * [Flutter SDK](https://docs.flutter.dev/get-started/install) installato e configurato (versione 3.0+ consigliata).
