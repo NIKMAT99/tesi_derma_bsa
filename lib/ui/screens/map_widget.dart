@@ -1,8 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geo;
-import 'package:geocoding/geocoding.dart';
+import 'package:http/http.dart' as http;
 
 class DermatogistsMapWidget extends StatefulWidget {
   final List<Map<String, dynamic>> preloadedDermatologists;
@@ -21,9 +23,18 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   bool _isSearching = false;
+  List<dynamic> _suggestions = [];
+  Timer? _debounce;
 
   @override
   bool get wantKeepAlive => true;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -66,18 +77,30 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     final query = _searchController.text;
     if (query.isEmpty) return;
 
-    setState(() => _isSearching = true);
+    setState(() {
+      _isSearching = true;
+      _suggestions = [];
+    });
     try {
-      List<Location> locations = await locationFromAddress(query);
-      if (locations.isNotEmpty) {
-        final loc = locations.first;
-        _mapController.move(LatLng(loc.latitude, loc.longitude), 14.0);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Indirizzo non trovato")),
-          );
+      // Nominatim da OpenStreetMap
+      final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+      final response = await http.get(url, headers: {'User-Agent': 'tesi_derma_bsa'});
+      
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        if (data.isNotEmpty) {
+          final lat = double.parse(data[0]['lat']);
+          final lon = double.parse(data[0]['lon']);
+          _mapController.move(LatLng(lat, lon), 14.0);
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Indirizzo non trovato")),
+            );
+          }
         }
+      } else {
+        throw Exception("Errore API");
       }
     } catch (e) {
       if (mounted) {
@@ -88,6 +111,49 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     } finally {
       if (mounted) setState(() => _isSearching = false);
     }
+  }
+
+  void _onSearchChanged(String query) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      _fetchSuggestions(query);
+    });
+  }
+
+  Future<void> _fetchSuggestions(String query) async {
+    if (query.isEmpty) {
+      setState(() => _suggestions = []);
+      return;
+    }
+
+    try {
+      final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=5&addressdetails=1');
+      final response = await http.get(url, headers: {'User-Agent': 'tesi_derma_bsa'});
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (mounted) {
+          setState(() {
+            _suggestions = data;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching suggestions: $e');
+    }
+  }
+
+  void _selectSuggestion(dynamic suggestion) {
+    final lat = double.parse(suggestion['lat']);
+    final lon = double.parse(suggestion['lon']);
+    final displayName = suggestion['display_name'];
+
+    _searchController.text = displayName;
+    setState(() {
+      _suggestions = [];
+    });
+    _mapController.move(LatLng(lat, lon), 15.0);
+    FocusScope.of(context).unfocus();
   }
 
   void _zoomIn() {
@@ -223,17 +289,54 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                                     onPressed: _searchAddress,
                                   ),
                           ),
+                          onChanged: _onSearchChanged,
                           onSubmitted: (_) => _searchAddress(),
                         ),
                       ),
                     ),
                   ],
                 ),
+                if (_suggestions.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 5, left: 55),
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        )
+                      ],
+                    ),
+                    constraints: const BoxConstraints(maxHeight: 250),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: _suggestions.length,
+                      separatorBuilder: (context, index) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final suggestion = _suggestions[index];
+                        return ListTile(
+                          leading: const Icon(Icons.location_on_outlined, size: 20),
+                          title: Text(
+                            suggestion['display_name'],
+                            style: const TextStyle(fontSize: 14),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => _selectSuggestion(suggestion),
+                        );
+                      },
+                    ),
+                  ),
               ],
             ),
           ),
 
-          // CONTROLLI ZOOM E POSIZIONE
+          // Controlli mappa
           Positioned(
             bottom: 120,
             right: 20,
