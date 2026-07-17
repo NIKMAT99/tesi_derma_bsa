@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart' as geo;
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../../models/body_region.dart';
 import '../../utils/bsa_calculator.dart';
 import 'region_painter_screen.dart';
+import 'map_widget.dart';
 import '../widgets/tutorial_overlay.dart';
 
 class InteractiveMapperScreen extends StatefulWidget {
@@ -114,6 +118,60 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
     });
   }
 
+  Future<void> _navigateToMap() async {
+    geo.Position? position;
+    try {
+      // Verifica i permessi prima di richiedere la posizione
+      geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+      }
+
+      if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
+        position = await geo.Geolocator.getCurrentPosition(
+          desiredAccuracy: geo.LocationAccuracy.high,
+        );
+      }
+    } catch (e) {
+      debugPrint("Errore geolocalizzazione: $e");
+    }
+
+    if (!mounted) return;
+
+    // Mostra un caricamento mentre recuperiamo i dati reali
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    List<Map<String, dynamic>> centers = [];
+    try {
+      final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        if (decoded['data'] is List) {
+          centers = List<Map<String, dynamic>>.from(decoded['data']);
+        }
+      }
+    } catch (e) {
+      debugPrint("Errore nel recupero dei centri: $e");
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context); // Chiudi il caricamento
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DermatogistsMapWidget(
+          preloadedDermatologists: centers,
+          currentPosition: position,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -124,6 +182,11 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
             title: const Text('Mappatura Psoriasi', style: TextStyle(color: Colors.white)),
             backgroundColor: Theme.of(context).colorScheme.primary,
             actions: [
+              IconButton(
+                icon: const Icon(Icons.map, color: Colors.white),
+                onPressed: _navigateToMap,
+                tooltip: 'Mappa Centri Dermatite Atopica',
+              ),
               IconButton(
                 icon: const Icon(Icons.refresh, color: Colors.white),
                 onPressed: _resetAll,
