@@ -75,4 +75,73 @@ class BsaCalculator {
       finalInvolvedPercentage: min(calculatedBsa, regionMaxBsa),
     );
   }
+
+  static Map<String, double> calculateBreakdown(Map<BodyRegion, double> regionCoverages) {
+    double headAndNeck = 0;
+    double upperLimbs = 0;
+    double trunk = 0;
+    double lowerLimbs = 0;
+
+    regionCoverages.forEach((region, coveragePercent) {
+      if (coveragePercent <= 0) return;
+      double maxRegionBsa = getRegionPercentage(region);
+      double actualBsa = (coveragePercent / 100.0) * maxRegionBsa;
+
+      switch (region) {
+        case BodyRegion.headFront:
+        case BodyRegion.headBack:
+        case BodyRegion.neckFront:
+        case BodyRegion.neckBack:
+          headAndNeck += actualBsa;
+          break;
+
+        case BodyRegion.upperArmLeftFront:
+        case BodyRegion.upperArmRightFront:
+        case BodyRegion.upperArmLeftBack:
+        case BodyRegion.upperArmRightBack:
+        case BodyRegion.forearmLeftFront:
+        case BodyRegion.forearmRightFront:
+        case BodyRegion.forearmLeftBack:
+        case BodyRegion.forearmRightBack:
+        case BodyRegion.handLeftFront:
+        case BodyRegion.handRightFront:
+        case BodyRegion.handLeftBack:
+        case BodyRegion.handRightBack:
+          upperLimbs += actualBsa;
+          break;
+
+        case BodyRegion.chest:
+        case BodyRegion.abdomen:
+        case BodyRegion.upperBack:
+        case BodyRegion.lowerBack:
+        case BodyRegion.genitals:
+        case BodyRegion.buttockLeft:
+        case BodyRegion.buttockRight:
+          trunk += actualBsa;
+          break;
+
+        case BodyRegion.thighLeftFront:
+        case BodyRegion.thighRightFront:
+        case BodyRegion.thighLeftBack:
+        case BodyRegion.thighRightBack:
+        case BodyRegion.lowerLegLeftFront:
+        case BodyRegion.lowerLegRightFront:
+        case BodyRegion.lowerLegLeftBack:
+        case BodyRegion.lowerLegRightBack:
+        case BodyRegion.footLeftFront:
+        case BodyRegion.footRightFront:
+        case BodyRegion.footLeftBack:
+        case BodyRegion.footRightBack:
+          lowerLimbs += actualBsa;
+          break;
+      }
+    });
+
+    return {
+      'Testa e collo': headAndNeck,
+      'Arti superiori': upperLimbs,
+      'Tronco': trunk,
+      'Arti inferiori': lowerLimbs,
+    };
+  }
 }

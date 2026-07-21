@@ -3,6 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../../models/body_region.dart';
 import '../../utils/bsa_calculator.dart';
 import 'region_painter_screen.dart';
@@ -17,9 +20,19 @@ class InteractiveMapperScreen extends StatefulWidget {
 }
 
 class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
-  bool _isFrontView = true;
+  static bool _hasShownMainTutorial = false;
 
-  final Map<BodyRegion, double> _regionCoverages = {};
+  bool _isFrontView = true;
+  String _selectedDisease = 'Psoriasi';
+
+  final Map<String, Map<BodyRegion, double>> _diseaseCoverages = {
+    'Psoriasi': {},
+    'Dermatite Atopica': {},
+  };
+  final Map<String, Map<BodyRegion, List<DrawingPoint?>>> _diseasePoints = {
+    'Psoriasi': {},
+    'Dermatite Atopica': {},
+  };
 
   // CHIAVI DI TRACCIAMENTO PER IL TUTORIAL A SCELTA MULTIPLA
   final GlobalKey _totalBsaKey = GlobalKey();
@@ -36,16 +49,13 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
   }
 
   Future<void> _checkFirstLaunch() async {
-    final prefs = await SharedPreferences.getInstance();
-    bool isFirstTime =  true; //bool isFirstTime = prefs.getBool('isFirstLaunchMapper') ?? true;
+    if (_hasShownMainTutorial) return;
 
-    if (isFirstTime) {
-      Future.delayed(const Duration(milliseconds: 200), () {
-        if (mounted) {
-          _calculateAllTutorialCoordinates();
-        }
-      });
-    }
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        _calculateAllTutorialCoordinates();
+      }
+    });
   }
 
   void _calculateAllTutorialCoordinates() {
@@ -82,8 +92,7 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
       });
     }
     else if (_tutorialStep == 3) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('isFirstLaunchMapper', false);
+      _hasShownMainTutorial = true;
       setState(() => _tutorialStep = 0);
     }
   }
@@ -103,7 +112,8 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
 
   double get _totalBsa {
     double total = 0.0;
-    _regionCoverages.forEach((region, coveragePercent) {
+    final currentCoverages = _diseaseCoverages[_selectedDisease] ?? {};
+    currentCoverages.forEach((region, coveragePercent) {
       if (coveragePercent > 0) {
         double maxRegionBsa = BsaCalculator.getRegionPercentage(region);
         total += (coveragePercent / 100.0) * maxRegionBsa;
@@ -113,9 +123,124 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
   }
 
   void _resetAll() {
-    setState(() {
-      _regionCoverages.clear();
-    });
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Conferma Reset'),
+        content: Text('Stai per cancellare tutte le parti colorate di $_selectedDisease, sei sicuro di procedere?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annulla'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _diseaseCoverages[_selectedDisease]?.clear();
+                _diseasePoints[_selectedDisease]?.clear();
+              });
+              Navigator.pop(context);
+            },
+            child: const Text('Resetta', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDetails() {
+    final currentCoverages = _diseaseCoverages[_selectedDisease] ?? {};
+    final breakdown = BsaCalculator.calculateBreakdown(currentCoverages);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Dettagli BSA per $_selectedDisease'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...breakdown.entries.map((e) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(e.key),
+                  Text('${e.value.toStringAsFixed(2)} %', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+            )),
+            const Divider(),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('BSA Totale', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text('${_totalBsa.toStringAsFixed(2)} %', style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Il BSA rappresenta esclusivamente la percentuale stimata di superficie corporea interessata e non sostituisce una valutazione dermatologica.',
+              style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Chiudi')),
+          ElevatedButton.icon(
+            onPressed: _generateAndSharePdf,
+            icon: const Icon(Icons.share),
+            label: const Text('Condividi PDF'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _generateAndSharePdf() async {
+    final pdf = pw.Document();
+    final currentCoverages = _diseaseCoverages[_selectedDisease] ?? {};
+    final breakdown = BsaCalculator.calculateBreakdown(currentCoverages);
+
+    pdf.addPage(
+      pw.Page(
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Header(level: 0, child: pw.Text('Report Valutazione BSA - $_selectedDisease')),
+              pw.SizedBox(height: 20),
+              pw.Text('Data: ${DateTime.now().toString().split('.')[0]}'),
+              pw.SizedBox(height: 20),
+              pw.TableHelper.fromTextArray(
+                headers: ['Regione', 'BSA (%)'],
+                data: breakdown.entries.map((e) => [e.key, '${e.value.toStringAsFixed(2)} %']).toList(),
+              ),
+              pw.SizedBox(height: 20),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text('BSA Totale Stimata:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18)),
+                  pw.Text('${_totalBsa.toStringAsFixed(2)} %', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              pw.SizedBox(height: 40),
+              pw.Divider(),
+              pw.Text(
+                'Disclaimer: Il BSA rappresenta esclusivamente la percentuale stimata di superficie corporea interessata e non sostituisce una valutazione dermatologica.',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
+              pw.Text(
+                'L\'app non richiede registrazione e non memorizza dati personali o risultati delle valutazioni.',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Printing.sharePdf(bytes: await pdf.save(), filename: 'report_bsa.pdf');
   }
 
   Future<void> _navigateToMap() async {
@@ -179,13 +304,13 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
         Scaffold(
           backgroundColor: Colors.white,
           appBar: AppBar(
-            title: const Text('Mappatura Psoriasi', style: TextStyle(color: Colors.white)),
+            title: Text('Mappatura $_selectedDisease', style: const TextStyle(color: Colors.white)),
             backgroundColor: Theme.of(context).colorScheme.primary,
             actions: [
               IconButton(
                 icon: const Icon(Icons.map, color: Colors.white),
                 onPressed: _navigateToMap,
-                tooltip: 'Mappa Centri Dermatite Atopica',
+                tooltip: 'Mappa Centri',
               ),
               IconButton(
                 icon: const Icon(Icons.refresh, color: Colors.white),
@@ -197,21 +322,67 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
           body: Column(
             children: [
               Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: Colors.grey[100],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('Patologia: ', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    DropdownButton<String>(
+                      value: _selectedDisease,
+                      items: ['Psoriasi', 'Dermatite Atopica'].map((String value) {
+                        return DropdownMenuItem<String>(
+                          value: value,
+                          child: Text(value),
+                        );
+                      }).toList(),
+                      onChanged: (newValue) {
+                        if (newValue != null) {
+                          setState(() => _selectedDisease = newValue);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              Container(
                 key: _totalBsaKey,
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.grey[50],
                   border: Border(bottom: BorderSide(color: Colors.grey[300]!, width: 1)),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
                   children: [
-                    const Text('BSA Totale Stimata:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    Text(
-                      '${_totalBsa.toStringAsFixed(2)} %',
-                      style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('BSA Totale Stimata:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text(
+                          '${_totalBsa.toStringAsFixed(2)} %',
+                          style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showDetails,
+                        icon: const Icon(Icons.list_alt),
+                        label: const Text('VEDI DETTAGLI'),
+                      ),
                     ),
                   ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.all(8.0),
+                child: Text(
+                  'L\'app non richiede registrazione e non memorizza dati personali o risultati delle valutazioni',
+                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                  textAlign: TextAlign.center,
                 ),
               ),
 
@@ -326,34 +497,40 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
     }
   }
 
+  Color _getDiseaseColor(String disease) {
+    return disease == 'Psoriasi' ? Colors.red : Colors.orange;
+  }
+
   Future<void> _showCoverageSlider(BodyRegion region) async {
     String regionName = region.name.replaceAll('_', ' ').toUpperCase();
     String specificOverlayPath = _getRegionOverlayPath(region);
 
-    final double? calculatedCoverage = await Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => RegionPainterScreen(
           region: region,
           imagePath: specificOverlayPath,
           regionName: regionName,
+          initialPoints: _diseasePoints[_selectedDisease]?[region],
+          activeColor: _getDiseaseColor(_selectedDisease),
         ),
       ),
     );
 
-    if (calculatedCoverage != null) {
+    if (result != null && result is Map<String, dynamic>) {
       setState(() {
-        _regionCoverages[region] = calculatedCoverage;
+        _diseaseCoverages[_selectedDisease]![region] = result['coverage'] as double;
+        _diseasePoints[_selectedDisease]![region] = result['points'] as List<DrawingPoint?>;
       });
     }
   }
 
-
   Widget _buildHitbox(BodyRegion region, double w, double h, {required double top, required double left, required double width, required double height, BorderRadius? borderRadius}) {
-    double coverage = _regionCoverages[region] ?? 0.0;
+    double coverage = _diseaseCoverages[_selectedDisease]?[region] ?? 0.0;
 
-
-    Color overlayColor = Colors.red.withOpacity((coverage / 100.0) * 0.8);
+    Color diseaseColor = _getDiseaseColor(_selectedDisease);
+    Color overlayColor = diseaseColor.withOpacity((coverage / 100.0) * 0.8);
 
     return Positioned(
       top: h * top,

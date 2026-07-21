@@ -11,12 +11,16 @@ class RegionPainterScreen extends StatefulWidget {
   final BodyRegion region;
   final String imagePath;
   final String regionName;
+  final List<DrawingPoint?>? initialPoints;
+  final Color activeColor;
 
   const RegionPainterScreen({
     super.key,
     required this.region,
     required this.imagePath,
     required this.regionName,
+    required this.activeColor,
+    this.initialPoints,
   });
 
   @override
@@ -24,6 +28,8 @@ class RegionPainterScreen extends StatefulWidget {
 }
 
 class _RegionPainterScreenState extends State<RegionPainterScreen> {
+  static bool _hasShownTutorialThisSession = false;
+
   final GlobalKey _canvasKey = GlobalKey();
 
   final GlobalKey _toolbarKey = GlobalKey();
@@ -36,39 +42,42 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
   int _totalAnatomyPixels = 0;
 
   List<DrawingPoint?> points = [];
+  final List<List<DrawingPoint?>> _undoHistory = [];
+  final List<List<DrawingPoint?>> _redoHistory = [];
+
   double strokeWidth = 25.0;
   bool _isEraserMode = false;
+  bool _isZoomMode = false;
+  final TransformationController _transformationController = TransformationController();
 
   @override
   void initState() {
     super.initState();
+    if (widget.initialPoints != null) {
+      points = List.from(widget.initialPoints!);
+    }
     _loadAndAnalyzeImage();
     _checkFirstLaunchPainter();
   }
 
   Future<void> _checkFirstLaunchPainter() async {
-    final prefs = await SharedPreferences.getInstance();
+    if (_hasShownTutorialThisSession) return;
 
-    bool isFirstTime = true; // lasciare true per testare il tutorial : bool isFirstTime = prefs.getBool('isFirstLaunchPainter') ?? true;
-
-
-    if (isFirstTime) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) {
-          final RenderBox? toolbarBox = _toolbarKey.currentContext?.findRenderObject() as RenderBox?;
-          if (toolbarBox != null) {
-            setState(() {
-              _tutorialTargetRect = toolbarBox.localToGlobal(Offset.zero) & toolbarBox.size;
-              _showTutorial = true;
-            });
-          }
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        final RenderBox? toolbarBox = _toolbarKey.currentContext?.findRenderObject() as RenderBox?;
+        if (toolbarBox != null) {
+          setState(() {
+            _tutorialTargetRect = toolbarBox.localToGlobal(Offset.zero) & toolbarBox.size;
+            _showTutorial = true;
+          });
         }
-      });
-    }
+      }
+    });
   }
-  void _closeTutorial() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isFirstLaunchPainter', false);
+
+  void _closeTutorial() {
+    _hasShownTutorialThisSession = true;
     setState(() => _showTutorial = false);
   }
 
@@ -100,11 +109,43 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
     }
   }
 
-  void _clearCanvas() => setState(() => points.clear());
+  void _clearCanvas() {
+    setState(() {
+      _saveToUndo();
+      points.clear();
+      _redoHistory.clear();
+    });
+  }
+
+  void _saveToUndo() {
+    _undoHistory.add(List.from(points));
+    if (_undoHistory.length > 20) _undoHistory.removeAt(0);
+  }
+
+  void _undo() {
+    if (_undoHistory.isNotEmpty) {
+      setState(() {
+        _redoHistory.add(List.from(points));
+        points = _undoHistory.removeLast();
+      });
+    }
+  }
+
+  void _redo() {
+    if (_redoHistory.isNotEmpty) {
+      setState(() {
+        _undoHistory.add(List.from(points));
+        points = _redoHistory.removeLast();
+      });
+    }
+  }
 
   void _calculateAndReturn() {
     if (points.isEmpty || _maskImage == null || _imageBytes == null || _totalAnatomyPixels == 0) {
-      Navigator.pop(context, 0.0);
+      Navigator.pop(context, {
+        'coverage': 0.0,
+        'points': <DrawingPoint?>[],
+      });
       return;
     }
 
@@ -170,7 +211,10 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
     double estimatedCoverage = (paintedValidArea / screenAnatomyArea) * 100;
     if (estimatedCoverage > 100) estimatedCoverage = 100.0;
 
-    Navigator.pop(context, estimatedCoverage);
+    Navigator.pop(context, {
+      'coverage': estimatedCoverage,
+      'points': points,
+    });
   }
 
   void _markCells(double cx, double cy, double radius, double cellSize, Set<String> cells, double maxW, double maxH, bool isEraser) {
@@ -208,6 +252,16 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
             iconTheme: const IconThemeData(color: Colors.white),
             actions: [
               IconButton(
+                icon: const Icon(Icons.undo, color: Colors.white),
+                onPressed: _undoHistory.isNotEmpty ? _undo : null,
+                tooltip: 'Annulla',
+              ),
+              IconButton(
+                icon: const Icon(Icons.redo, color: Colors.white),
+                onPressed: _redoHistory.isNotEmpty ? _redo : null,
+                tooltip: 'Ripristina',
+              ),
+              IconButton(
                 icon: const Icon(Icons.delete_sweep_outlined),
                 onPressed: _clearCanvas,
                 tooltip: 'Svuota tutto',
@@ -225,12 +279,25 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
                 child: Row(
                   children: [
                     IconButton(
-                      icon: Icon(Icons.brush, color: !_isEraserMode ? Colors.redAccent : Colors.grey),
-                      onPressed: () => setState(() => _isEraserMode = false),
+                      icon: Icon(Icons.brush, color: (!_isEraserMode && !_isZoomMode) ? Colors.redAccent : Colors.grey),
+                      onPressed: () => setState(() {
+                        _isEraserMode = false;
+                        _isZoomMode = false;
+                      }),
+                      tooltip: 'Pennello',
                     ),
                     IconButton(
-                      icon: Icon(Icons.cleaning_services, color: _isEraserMode ? Colors.white : Colors.grey),
-                      onPressed: () => setState(() => _isEraserMode = true),
+                      icon: Icon(Icons.cleaning_services, color: (_isEraserMode && !_isZoomMode) ? Colors.white : Colors.grey),
+                      onPressed: () => setState(() {
+                        _isEraserMode = true;
+                        _isZoomMode = false;
+                      }),
+                      tooltip: 'Gomma',
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.zoom_in, color: _isZoomMode ? Colors.blueAccent : Colors.grey),
+                      onPressed: () => setState(() => _isZoomMode = true),
+                      tooltip: 'Zoom e Pan',
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -251,27 +318,39 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
 
               Expanded(
                 child: Center(
-                  child: Stack(
-                    key: _canvasKey,
-                    children: [
-                      Positioned.fill(
-                        child: GestureDetector(
-                          onPanStart: (details) => _addPoint(details.localPosition),
-                          onPanUpdate: (details) => _addPoint(details.localPosition),
-                          onPanEnd: (details) {
-                            setState(() {
-                              points.add(null);
-                            });
-                          },
-                          child: CustomPaint(
-                            painter: MaskedSketcher(
-                              points: points,
-                              maskImage: _maskImage,
+                  child: InteractiveViewer(
+                    transformationController: _transformationController,
+                    panEnabled: _isZoomMode,
+                    scaleEnabled: _isZoomMode,
+                    minScale: 1.0,
+                    maxScale: 5.0,
+                    child: Stack(
+                      key: _canvasKey,
+                      children: [
+                        Positioned.fill(
+                          child: GestureDetector(
+                            onPanStart: _isZoomMode ? null : (details) {
+                              _saveToUndo();
+                              _redoHistory.clear();
+                              _addPoint(details.localPosition);
+                            },
+                            onPanUpdate: _isZoomMode ? null : (details) => _addPoint(details.localPosition),
+                            onPanEnd: _isZoomMode ? null : (details) {
+                              setState(() {
+                                points.add(null);
+                              });
+                            },
+                            child: CustomPaint(
+                              painter: MaskedSketcher(
+                                points: points,
+                                maskImage: _maskImage,
+                                activeColor: widget.activeColor,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -330,8 +409,9 @@ class DrawingPoint {
 class MaskedSketcher extends CustomPainter {
   final List<DrawingPoint?> points;
   final ui.Image? maskImage;
+  final Color activeColor;
 
-  MaskedSketcher({required this.points, required this.maskImage});
+  MaskedSketcher({required this.points, required this.maskImage, required this.activeColor});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -351,7 +431,7 @@ class MaskedSketcher extends CustomPainter {
     for (int i = 0; i < points.length - 1; i++) {
       if (points[i] != null && points[i + 1] != null) {
         Paint p = Paint()
-          ..color = points[i]!.isEraser ? Colors.transparent : Colors.red.withOpacity(0.75)
+          ..color = points[i]!.isEraser ? Colors.transparent : activeColor.withOpacity(0.75)
           ..strokeWidth = points[i]!.strokeWidth
           ..strokeCap = StrokeCap.round
           ..isAntiAlias = true
@@ -360,7 +440,7 @@ class MaskedSketcher extends CustomPainter {
         canvas.drawLine(points[i]!.offset, points[i + 1]!.offset, p);
       } else if (points[i] != null && points[i + 1] == null) {
         Paint p = Paint()
-          ..color = points[i]!.isEraser ? Colors.transparent : Colors.red.withOpacity(0.75)
+          ..color = points[i]!.isEraser ? Colors.transparent : activeColor.withOpacity(0.75)
           ..strokeWidth = points[i]!.strokeWidth
           ..strokeCap = StrokeCap.round
           ..isAntiAlias = true
