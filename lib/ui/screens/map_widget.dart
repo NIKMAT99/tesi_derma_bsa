@@ -7,11 +7,11 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 
 class DermatogistsMapWidget extends StatefulWidget {
-  final List<Map<String, dynamic>> preloadedDermatologists;
+  final String initialDisease;
   final geo.Position? currentPosition;
   const DermatogistsMapWidget(
       {super.key,
-      required this.preloadedDermatologists,
+      required this.initialDisease,
       required this.currentPosition});
 
   @override
@@ -26,6 +26,11 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   List<dynamic> _suggestions = [];
   Timer? _debounce;
 
+  String _selectedDisease = 'Dermatite Atopica';
+  List<dynamic> _centers = [];
+  bool _isLoadingCenters = false;
+  final Map<String, List<dynamic>> _centersCache = {};
+
   @override
   bool get wantKeepAlive => true;
 
@@ -39,12 +44,87 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   @override
   void initState() {
     super.initState();
+    _selectedDisease = widget.initialDisease;
+    _fetchCenters();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.currentPosition == null) {
         _showPositionWarning();
       }
     });
+  }
+
+  Future<void> _fetchCenters({bool forceRefresh = false}) async {
+    if (!forceRefresh && _centersCache.containsKey(_selectedDisease)) {
+      setState(() {
+        _centers = _centersCache[_selectedDisease]!;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoadingCenters = true;
+      if (forceRefresh) {
+        _centers = [];
+      }
+    });
+
+    try {
+      if (_selectedDisease == 'Psoriasi') {
+        final response = await http.get(Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'));
+        if (response.statusCode == 200) {
+          final List<dynamic> allMarkers = json.decode(response.body);
+          final filtered = allMarkers.where((m) {
+            final mapId = m['map_id']?.toString();
+            final category = m['category']?.toString() ?? '';
+            final categories = category.split(',').map((e) => e.trim()).toList();
+            return mapId == '4' && categories.contains('4');
+          }).map((m) {
+            final desc = m['description']?.toString() ?? '';
+            if (desc.isNotEmpty) {
+              m['phone'] = _extractPhone(desc);
+              m['email'] = _extractEmail(desc);
+            }
+            return m;
+          }).toList();
+
+          _centersCache['Psoriasi'] = filtered;
+          setState(() {
+            _centers = filtered;
+          });
+        }
+      } else {
+        // Dermatite Atopica
+        final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
+        if (response.statusCode == 200) {
+          final decoded = json.decode(response.body);
+          if (decoded['data'] is List) {
+            final data = List<dynamic>.from(decoded['data']);
+            _centersCache['Dermatite Atopica'] = data;
+            setState(() {
+              _centers = data;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching centers: $e");
+    } finally {
+      if (mounted) setState(() => _isLoadingCenters = false);
+    }
+  }
+
+  String? _extractEmail(String html) {
+    final emailRegex = RegExp(r'mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})');
+    final match = emailRegex.firstMatch(html);
+    return match?.group(1);
+  }
+
+  String? _extractPhone(String html) {
+    final cleanText = html.replaceAll(RegExp(r'<[^>]*>'), ' ').trim();
+    final phoneRegex = RegExp(r'(\+?\d[\d\s\/\-]{7,})');
+    final match = phoneRegex.firstMatch(cleanText);
+    return match?.group(1)?.trim();
   }
 
   void _showPositionWarning() {
@@ -57,6 +137,14 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   }
 
   void _showDermatologistPopup(Map<String, dynamic> derm) {
+    String address = derm['address'] ?? '';
+    if (derm['city'] != null && derm['city'].toString().isNotEmpty) {
+      address += (address.isEmpty ? '' : ', ') + derm['city'];
+    }
+    if (derm['district'] != null && derm['district'].toString().isNotEmpty) {
+      address += ' (${derm['district']})';
+    }
+
     showModalBottomSheet(
       context: context,
       useSafeArea: true,
@@ -64,9 +152,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       barrierColor: Colors.black12,
       backgroundColor: Colors.transparent,
       builder: (_) => DermatologistPopup(
-        name: derm['center_name'] ?? derm['name'] ?? 'N/A',
+        name: derm['center_name'] ?? derm['name'] ?? derm['title'] ?? 'N/A',
         specialty: derm['department'] ?? derm['specialty'] ?? 'Centro Dermatologico',
-        address: '${derm['address'] ?? ''}, ${derm['city'] ?? ''} (${derm['district'] ?? ''})',
+        address: address,
         phone: derm['phone'],
         email: derm['email'],
       ),
@@ -198,7 +286,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                 userAgentPackageName: 'com.example.tesi_derma_bsa',
               ),
               MarkerLayer(
-                markers: widget.preloadedDermatologists.map((derm) {
+                markers: _centers.map((derm) {
                   double? lat = double.tryParse(derm['lat']?.toString() ?? '');
                   double? lon = double.tryParse(derm['lon']?.toString() ?? derm['lng']?.toString() ?? '');
 
@@ -296,6 +384,25 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'Dermatite Atopica', label: Text('Dermatite')),
+                    ButtonSegment(value: 'Psoriasi', label: Text('Psoriasi')),
+                  ],
+                  selected: {_selectedDisease},
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.9),
+                    selectedBackgroundColor: Theme.of(context).colorScheme.primary,
+                    selectedForegroundColor: Colors.white,
+                  ),
+                  onSelectionChanged: (Set<String> newSelection) {
+                    setState(() {
+                      _selectedDisease = newSelection.first;
+                    });
+                    _fetchCenters();
+                  },
+                ),
                 if (_suggestions.isNotEmpty)
                   Container(
                     margin: const EdgeInsets.only(top: 5, left: 55),
@@ -342,6 +449,8 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
             right: 20,
             child: Column(
               children: [
+                _buildCircleButton(Icons.refresh, () => _fetchCenters(forceRefresh: true)),
+                const SizedBox(height: 10),
                 _buildCircleButton(Icons.add, _zoomIn),
                 const SizedBox(height: 10),
                 _buildCircleButton(Icons.remove, _zoomOut),
@@ -350,6 +459,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
               ],
             ),
           ),
+          // Caricamento centri
+          if (_isLoadingCenters)
+            const Center(child: CircularProgressIndicator()),
         ],
       ),
     );

@@ -23,7 +23,7 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
   static bool _hasShownMainTutorial = false;
 
   bool _isFrontView = true;
-  String _selectedDisease = 'Psoriasi';
+  String _selectedDisease = 'Dermatite Atopica';
 
   final Map<String, Map<BodyRegion, double>> _diseaseCoverages = {
     'Psoriasi': {},
@@ -263,34 +263,11 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
 
     if (!mounted) return;
 
-    // Mostra un caricamento mentre recuperiamo i dati reali
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
-    List<Map<String, dynamic>> centers = [];
-    try {
-      final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
-      if (response.statusCode == 200) {
-        final decoded = json.decode(response.body);
-        if (decoded['data'] is List) {
-          centers = List<Map<String, dynamic>>.from(decoded['data']);
-        }
-      }
-    } catch (e) {
-      debugPrint("Errore nel recupero dei centri: $e");
-    }
-
-    if (!mounted) return;
-    Navigator.pop(context); // Chiudi il caricamento
-
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DermatogistsMapWidget(
-          preloadedDermatologists: centers,
+          initialDisease: _selectedDisease,
           currentPosition: position,
         ),
       ),
