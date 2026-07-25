@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart' as geo;
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../models/body_region.dart';
@@ -187,17 +183,49 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
         actionsAlignment: MainAxisAlignment.center,
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Chiudi')),
-          ElevatedButton.icon(
-            onPressed: _generateAndSharePdf,
-            icon: const Icon(Icons.share),
-            label: const Text('Condividi PDF'),
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'export') _handlePdfAction(false);
+              if (value == 'share') _handlePdfAction(true);
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'export',
+                child: Row(
+                  children: [
+                    Icon(Icons.picture_as_pdf, size: 20),
+                    SizedBox(width: 8),
+                    Text('Esporta PDF (Salva/Stampa)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share',
+                child: Row(
+                  children: [
+                    Icon(Icons.share, size: 20),
+                    SizedBox(width: 8),
+                    Text('Condividi PDF'),
+                  ],
+                ),
+              ),
+            ],
+            child: ElevatedButton.icon(
+              onPressed: null,
+              icon: const Icon(Icons.picture_as_pdf),
+              label: const Text('Opzioni PDF'),
+              style: ElevatedButton.styleFrom(
+                disabledBackgroundColor: Theme.of(context).colorScheme.primary,
+                disabledForegroundColor: Colors.white,
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _generateAndSharePdf() async {
+  pw.Document _buildPdfReport() {
     final pdf = pw.Document();
     final currentCoverages = _diseaseCoverages[_selectedDisease] ?? {};
     final breakdown = BsaCalculator.calculateBreakdown(currentCoverages);
@@ -239,8 +267,21 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
         },
       ),
     );
+    return pdf;
+  }
 
-    await Printing.sharePdf(bytes: await pdf.save(), filename: 'report_bsa.pdf');
+  Future<void> _handlePdfAction(bool isShare) async {
+    final pdf = _buildPdfReport();
+    final filename = 'report_bsa_${_selectedDisease.replaceAll(' ', '_')}.pdf';
+
+    if (isShare) {
+      await Printing.sharePdf(bytes: await pdf.save(), filename: filename);
+    } else {
+      await Printing.layoutPdf(
+        onLayout: (format) async => pdf.save(),
+        name: filename,
+      );
+    }
   }
 
   Future<void> _navigateToMap() async {

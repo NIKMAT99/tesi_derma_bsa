@@ -59,6 +59,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       setState(() {
         _centers = _centersCache[_selectedDisease]!;
       });
+      _preloadOtherDisease();
       return;
     }
 
@@ -70,48 +71,65 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     });
 
     try {
-      if (_selectedDisease == 'Psoriasi') {
-        final response = await http.get(Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'));
-        if (response.statusCode == 200) {
-          final List<dynamic> allMarkers = json.decode(response.body);
-          final filtered = allMarkers.where((m) {
-            final mapId = m['map_id']?.toString();
-            final category = m['category']?.toString() ?? '';
-            final categories = category.split(',').map((e) => e.trim()).toList();
-            return mapId == '4' && categories.contains('4');
-          }).map((m) {
-            final desc = m['description']?.toString() ?? '';
-            if (desc.isNotEmpty) {
-              m['phone'] = _extractPhone(desc);
-              m['email'] = _extractEmail(desc);
-            }
-            return m;
-          }).toList();
-
-          _centersCache['Psoriasi'] = filtered;
-          setState(() {
-            _centers = filtered;
-          });
-        }
-      } else {
-        // Dermatite Atopica
-        final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
-        if (response.statusCode == 200) {
-          final decoded = json.decode(response.body);
-          if (decoded['data'] is List) {
-            final data = List<dynamic>.from(decoded['data']);
-            _centersCache['Dermatite Atopica'] = data;
-            setState(() {
-              _centers = data;
-            });
-          }
-        }
+      final centers = await _fetchCentersForDisease(_selectedDisease);
+      if (centers != null) {
+        _centersCache[_selectedDisease] = centers;
+        setState(() {
+          _centers = centers;
+        });
+        _preloadOtherDisease();
       }
     } catch (e) {
       debugPrint("Error fetching centers: $e");
     } finally {
       if (mounted) setState(() => _isLoadingCenters = false);
     }
+  }
+
+  Future<void> _preloadOtherDisease() async {
+    final otherDisease = _selectedDisease == 'Psoriasi' ? 'Dermatite Atopica' : 'Psoriasi';
+    if (!_centersCache.containsKey(otherDisease)) {
+      try {
+        final centers = await _fetchCentersForDisease(otherDisease);
+        if (centers != null) {
+          _centersCache[otherDisease] = centers;
+        }
+      } catch (e) {
+        debugPrint("Error preloading centers: $e");
+      }
+    }
+  }
+
+  Future<List<dynamic>?> _fetchCentersForDisease(String disease) async {
+    if (disease == 'Psoriasi') {
+      final response = await http.get(Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'));
+      if (response.statusCode == 200) {
+        final List<dynamic> allMarkers = json.decode(response.body);
+        return allMarkers.where((m) {
+          final mapId = m['map_id']?.toString();
+          final category = m['category']?.toString() ?? '';
+          final categories = category.split(',').map((e) => e.trim()).toList();
+          return mapId == '4' && categories.contains('4');
+        }).map((m) {
+          final desc = m['description']?.toString() ?? '';
+          if (desc.isNotEmpty) {
+            m['phone'] = _extractPhone(desc);
+            m['email'] = _extractEmail(desc);
+          }
+          return m;
+        }).toList();
+      }
+    } else {
+      // Dermatite Atopica
+      final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        if (decoded['data'] is List) {
+          return List<dynamic>.from(decoded['data']);
+        }
+      }
+    }
+    return null;
   }
 
   String? _extractEmail(String html) {
