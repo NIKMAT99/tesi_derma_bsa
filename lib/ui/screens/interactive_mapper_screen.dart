@@ -93,6 +93,13 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
     }
   }
 
+  void _skipTutorial() {
+    setState(() {
+      _hasShownMainTutorial = true;
+      _tutorialStep = 0;
+    });
+  }
+
   String _getTutorialText(int step) {
     switch (step) {
       case 1:
@@ -469,6 +476,7 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
             instructionText: _getTutorialText(_tutorialStep),
             requireTapInsideHole: _tutorialStep == 2,
             onTap: _handleTutorialTap,
+            onSkip: _skipTutorial,
           ),
       ],
     );

@@ -4,6 +4,7 @@ class TutorialOverlay extends StatelessWidget {
   final Rect highlightRect;
   final String instructionText;
   final VoidCallback onTap;
+  final VoidCallback? onSkip;
   final bool requireTapInsideHole;
 
   const TutorialOverlay({
@@ -11,6 +12,7 @@ class TutorialOverlay extends StatelessWidget {
     required this.highlightRect,
     required this.instructionText,
     required this.onTap,
+    this.onSkip,
     this.requireTapInsideHole = false,
   });
 
@@ -74,6 +76,26 @@ class TutorialOverlay extends StatelessWidget {
                           const Icon(Icons.arrow_forward, color: Colors.white70, size: 14),
                       ],
                     ),
+                    if (onSkip != null) ...[
+                      const Divider(color: Colors.white24, height: 24),
+                      TextButton(
+                        onPressed: onSkip,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          'SALTA TUTORIAL',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

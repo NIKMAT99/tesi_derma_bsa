@@ -379,9 +379,12 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                         ),
                         child: TextField(
                           controller: _searchController,
+                          textAlignVertical: TextAlignVertical.center,
                           decoration: InputDecoration(
                             hintText: "Cerca indirizzo...",
                             border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                            isDense: true,
                             suffixIcon: _isSearching
                                 ? const Padding(
                                     padding: EdgeInsets.all(12.0),

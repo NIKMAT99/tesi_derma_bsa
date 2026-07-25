@@ -382,6 +382,7 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
             highlightRect: _tutorialTargetRect!,
             instructionText: 'Usa questi strumenti! Il pennello per colorare, la gomma per cancellare eventuali sbavature sulla pelle, e lo slider per regolare lo spessore del tratto.',
             onTap: _closeTutorial,
+            onSkip: _closeTutorial,
           ),
       ],
     );
