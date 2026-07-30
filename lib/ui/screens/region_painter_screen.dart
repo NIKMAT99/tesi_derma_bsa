@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'dart:math';
-import 'package:flutter/services.dart';
 import '../../models/body_region.dart';
 import '../widgets/tutorial_overlay.dart';
 
@@ -31,7 +31,6 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
   static bool _hasShownTutorialThisSession = false;
 
   final GlobalKey _canvasKey = GlobalKey();
-
   final GlobalKey _toolbarKey = GlobalKey();
   bool _showTutorial = false;
   Rect? _tutorialTargetRect;
@@ -60,6 +59,13 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
     _checkFirstLaunchPainter();
   }
 
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    _maskImage?.dispose();
+    super.dispose();
+  }
+
   Future<void> _checkFirstLaunchPainter() async {
     if (_hasShownTutorialThisSession) return;
 
@@ -83,12 +89,50 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
 
   Future<void> _loadAndAnalyzeImage() async {
     try {
-      final ByteData data = await rootBundle.load(widget.imagePath);
-      final Uint8List list = data.buffer.asUint8List();
-      final ui.Codec codec = await ui.instantiateImageCodec(list);
-      final ui.FrameInfo frameInfo = await codec.getNextFrame();
-      final ui.Image img = frameInfo.image;
+      String svgPath = widget.imagePath;
 
+      // Sovrascrivo, sempre per evitare di cambiare tutti gli switch case
+      if (svgPath.contains('assets/images/')) {
+        svgPath = svgPath.replaceAll('assets/images/', 'assets/svg/');
+      }
+
+      // Sovrascrivo, se i nomi sono uguali cambiamo solamente l'estensione
+      if (svgPath.endsWith('.png')) {
+        svgPath = svgPath.replaceAll('.png', '.svg');
+      }
+
+      debugPrint('Attempting to load SVG asset from path: $svgPath');
+
+      // Caricamento immagini SVG
+      final PictureInfo pictureInfo = await vg.loadPicture(
+        SvgAssetLoader(svgPath),
+        null,
+      );
+
+      final double nativeW = pictureInfo.size.width > 0 ? pictureInfo.size.width : 500.0;
+      final double nativeH = pictureInfo.size.height > 0 ? pictureInfo.size.height : 500.0;
+
+      // Seconda immagine di dimensioni fisse non visibile per i calcoli
+      const double targetMax = 1200.0;
+      final double maxDim = max(nativeW, nativeH);
+      final double scale = targetMax / maxDim;
+
+      final int canvasW = (nativeW * scale).round();
+      final int canvasH = (nativeH * scale).round();
+
+      final ui.PictureRecorder recorder = ui.PictureRecorder();
+      final Canvas canvas = Canvas(
+        recorder,
+        Rect.fromLTWH(0, 0, canvasW.toDouble(), canvasH.toDouble()),
+      );
+
+      canvas.scale(scale, scale);
+      canvas.drawPicture(pictureInfo.picture);
+
+      final ui.Image img = await recorder.endRecording().toImage(canvasW, canvasH);
+      pictureInfo.picture.dispose();
+
+      // Nuovo calcolatore pixel colorati e non
       final ByteData? imgBytes = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
 
       int opaqueCount = 0;
@@ -98,14 +142,20 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
         }
       }
 
-      setState(() {
-        _maskImage = img;
-        _imageBytes = imgBytes;
-        _totalAnatomyPixels = opaqueCount;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _maskImage = img;
+          _imageBytes = imgBytes;
+          _totalAnatomyPixels = opaqueCount;
+          _isLoading = false;
+        });
+      }
+    } catch (e, stack) {
+      debugPrint('Error loading SVG asset: $e');
+      debugPrint('Stack trace: $stack');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -231,9 +281,9 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
 
         if (pow(cellX - cx, 2) + pow(cellY - cy, 2) <= radius * radius) {
           if (isEraser) {
-            cells.remove('${x}_${y}');
+            cells.remove('${x}_$y');
           } else {
-            cells.add('${x}_${y}');
+            cells.add('${x}_$y');
           }
         }
       }
@@ -245,7 +295,7 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
     return Stack(
       children: [
         Scaffold(
-          backgroundColor: Colors.black,
+          backgroundColor: Color(0xFF858585), // era Color(0xFF1E1E1E)
           appBar: AppBar(
             title: Text(widget.regionName, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             backgroundColor: Theme.of(context).colorScheme.primary,
@@ -315,7 +365,6 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
                   ],
                 ),
               ),
-
               Expanded(
                 child: Center(
                   child: InteractiveViewer(
@@ -329,13 +378,17 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
                       children: [
                         Positioned.fill(
                           child: GestureDetector(
-                            onPanStart: _isZoomMode ? null : (details) {
+                            onPanStart: _isZoomMode
+                                ? null
+                                : (details) {
                               _saveToUndo();
                               _redoHistory.clear();
                               _addPoint(details.localPosition);
                             },
                             onPanUpdate: _isZoomMode ? null : (details) => _addPoint(details.localPosition),
-                            onPanEnd: _isZoomMode ? null : (details) {
+                            onPanEnd: _isZoomMode
+                                ? null
+                                : (details) {
                               setState(() {
                                 points.add(null);
                               });
@@ -354,7 +407,6 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
                   ),
                 ),
               ),
-
               Container(
                 color: Colors.black,
                 padding: const EdgeInsets.all(16.0),
@@ -376,7 +428,6 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
             ],
           ),
         ),
-
         if (_showTutorial && _tutorialTargetRect != null)
           TutorialOverlay(
             highlightRect: _tutorialTargetRect!,
