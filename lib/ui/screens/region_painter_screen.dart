@@ -195,6 +195,10 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
       Navigator.pop(context, {
         'coverage': 0.0,
         'points': <DrawingPoint?>[],
+        'svgWidth': _maskImage?.width ?? 0,
+        'svgHeight': _maskImage?.height ?? 0,
+        'canvasWidth': 0.0,
+        'canvasHeight': 0.0,
       });
       return;
     }
@@ -264,6 +268,10 @@ class _RegionPainterScreenState extends State<RegionPainterScreen> {
     Navigator.pop(context, {
       'coverage': estimatedCoverage,
       'points': points,
+      'svgWidth': imgW,
+      'svgHeight': imgH,
+      'canvasWidth': screenW,
+      'canvasHeight': screenH,
     });
   }
 

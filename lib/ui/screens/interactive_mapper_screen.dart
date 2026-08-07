@@ -1,5 +1,10 @@
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../models/body_region.dart';
@@ -29,6 +34,62 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
     'Psoriasi': {},
     'Dermatite Atopica': {},
   };
+
+  // Metadati di rendering per ogni regione (dimensioni SVG e canvas)
+  final Map<String, Map<BodyRegion, Map<String, dynamic>>> _regionRenderInfo = {
+    'Psoriasi': {},
+    'Dermatite Atopica': {},
+  };
+
+  // Coordinate hitbox per le viste anteriore e posteriore (frazioni 0-1)
+  // Usate per il rendering delle immagini nel PDF
+  static const Map<BodyRegion, ({double left, double top, double width, double height})> _frontCoords = {
+    BodyRegion.headFront: (left: 0.40, top: 0.03, width: 0.19, height: 0.12),
+    BodyRegion.neckFront: (left: 0.43, top: 0.14, width: 0.14, height: 0.04),
+    BodyRegion.chest: (left: 0.33, top: 0.18, width: 0.33, height: 0.16),
+    BodyRegion.abdomen: (left: 0.35, top: 0.34, width: 0.30, height: 0.11),
+    BodyRegion.genitals: (left: 0.42, top: 0.44, width: 0.15, height: 0.06),
+    BodyRegion.upperArmLeftFront: (left: 0.65, top: 0.19, width: 0.11, height: 0.15),
+    BodyRegion.forearmLeftFront: (left: 0.70, top: 0.34, width: 0.12, height: 0.14),
+    BodyRegion.handLeftFront: (left: 0.79, top: 0.47, width: 0.13, height: 0.08),
+    BodyRegion.upperArmRightFront: (left: 0.23, top: 0.19, width: 0.11, height: 0.15),
+    BodyRegion.forearmRightFront: (left: 0.15, top: 0.34, width: 0.12, height: 0.14),
+    BodyRegion.handRightFront: (left: 0.07, top: 0.47, width: 0.13, height: 0.08),
+    BodyRegion.thighLeftFront: (left: 0.51, top: 0.47, width: 0.18, height: 0.20),
+    BodyRegion.lowerLegLeftFront: (left: 0.53, top: 0.67, width: 0.12, height: 0.16),
+    BodyRegion.footLeftFront: (left: 0.54, top: 0.83, width: 0.12, height: 0.10),
+    BodyRegion.thighRightFront: (left: 0.30, top: 0.47, width: 0.18, height: 0.20),
+    BodyRegion.lowerLegRightFront: (left: 0.34, top: 0.67, width: 0.12, height: 0.16),
+    BodyRegion.footRightFront: (left: 0.34, top: 0.83, width: 0.12, height: 0.10),
+  };
+
+  static const Map<BodyRegion, ({double left, double top, double width, double height})> _backCoords = {
+    BodyRegion.headBack: (left: 0.40, top: 0.04, width: 0.20, height: 0.10),
+    BodyRegion.neckBack: (left: 0.43, top: 0.14, width: 0.14, height: 0.03),
+    BodyRegion.upperBack: (left: 0.35, top: 0.17, width: 0.30, height: 0.17),
+    BodyRegion.lowerBack: (left: 0.35, top: 0.35, width: 0.31, height: 0.07),
+    BodyRegion.buttockRight: (left: 0.32, top: 0.43, width: 0.18, height: 0.09),
+    BodyRegion.buttockLeft: (left: 0.52, top: 0.43, width: 0.18, height: 0.09),
+    BodyRegion.upperArmLeftBack: (left: 0.23, top: 0.20, width: 0.11, height: 0.15),
+    BodyRegion.forearmLeftBack: (left: 0.13, top: 0.35, width: 0.15, height: 0.13),
+    BodyRegion.handLeftBack: (left: 0.07, top: 0.48, width: 0.12, height: 0.08),
+    BodyRegion.upperArmRightBack: (left: 0.67, top: 0.20, width: 0.11, height: 0.15),
+    BodyRegion.forearmRightBack: (left: 0.73, top: 0.35, width: 0.15, height: 0.13),
+    BodyRegion.handRightBack: (left: 0.83, top: 0.48, width: 0.12, height: 0.08),
+    BodyRegion.thighLeftBack: (left: 0.32, top: 0.52, width: 0.17, height: 0.17),
+    BodyRegion.lowerLegLeftBack: (left: 0.35, top: 0.69, width: 0.13, height: 0.17),
+    BodyRegion.footLeftBack: (left: 0.35, top: 0.86, width: 0.12, height: 0.10),
+    BodyRegion.thighRightBack: (left: 0.53, top: 0.52, width: 0.17, height: 0.17),
+    BodyRegion.lowerLegRightBack: (left: 0.54, top: 0.69, width: 0.13, height: 0.17),
+    BodyRegion.footRightBack: (left: 0.54, top: 0.86, width: 0.12, height: 0.10),
+  };
+
+  // Correzione empirica per allineare le sagome SVG nel PDF.
+  // I valori sono in pixel canvas (2x) e compensano il disallineamento
+  // tra le coordinate hitbox (usate per il tap) e la posizione reale
+  // delle sagome SVG sul corpo.
+  static const double _svgCorrectionX = 2.0;  // sposta dx (verso destra)
+  static const double _svgCorrectionY = -6.0; // sposta dy (verso l'alto)
 
   // CHIAVI DI TRACCIAMENTO PER IL TUTORIAL A SCELTA MULTIPLA
   final GlobalKey _totalBsaKey = GlobalKey();
@@ -232,53 +293,261 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
     );
   }
 
-  pw.Document _buildPdfReport() {
+  /// Rendering del corpo (fronte o retro) con sagome SVG colorate
+  /// in immagine PNG.
+  Future<Uint8List?> _renderBodyPreviewForPdf(bool isFrontView) async {
+    try {
+      // Caricamento immagine corpo
+      final bodyAsset = isFrontView ? 'assets/images/body_front.png' : 'assets/images/body_back.png';
+      final bodyBytes = (await rootBundle.load(bodyAsset)).buffer.asUint8List();
+      final codec = await ui.instantiateImageCodec(bodyBytes);
+      final frameInfo = await codec.getNextFrame();
+      final ui.Image bodyImage = frameInfo.image;
+      codec.dispose();
+
+      final double bodyW = bodyImage.width.toDouble();
+      final double bodyH = bodyImage.height.toDouble();
+
+      // Rendering
+      const double scaleFactor = 2.0;
+      final int canvasW = (bodyW * scaleFactor).round();
+      final int canvasH = (bodyH * scaleFactor).round();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, canvasW.toDouble(), canvasH.toDouble()));
+
+      // Disegno corpo e sagome colorate
+      final paintHi = Paint()..filterQuality = FilterQuality.high;
+      final Offset appOffset = isFrontView
+          ? const Offset(-10, -17)
+          : const Offset(6, -13);
+      const double appScale = 1.08;
+
+      canvas.save();
+      canvas.translate(canvasW / 2.0, canvasH / 2.0);
+      canvas.scale(appScale);
+      canvas.translate(-canvasW / 2.0, -canvasH / 2.0);
+      canvas.translate(appOffset.dx * scaleFactor, appOffset.dy * scaleFactor);
+      canvas.drawImageRect(
+        bodyImage,
+        Rect.fromLTWH(0, 0, bodyW, bodyH),
+        Rect.fromLTWH(0, 0, canvasW.toDouble(), canvasH.toDouble()),
+        paintHi,
+      );
+      canvas.restore();
+
+      // Singole sagome SVG
+      final coords = isFrontView ? _frontCoords : _backCoords;
+      final Color diseaseColor = _getDiseaseColor(_selectedDisease);
+
+      for (final entry in coords.entries) {
+        final region = entry.key;
+        final coverage = _diseaseCoverages[_selectedDisease]?[region] ?? 0.0;
+        if (coverage <= 0.0) continue;
+
+        final coord = entry.value;
+        final double hitboxLeft = canvasW * coord.left;
+        final double hitboxTop = canvasH * coord.top;
+        final double hitboxW = canvasW * coord.width;
+        final double hitboxH = canvasH * coord.height;
+
+        String svgPath = _getRegionOverlayPath(region);
+        svgPath = svgPath.replaceFirst('assets/images/', 'assets/svg/');
+        svgPath = svgPath.replaceAll('.png', '.svg');
+
+        final pictureInfo = await vg.loadPicture(SvgAssetLoader(svgPath), null);
+        final double svgNativeW = pictureInfo.size.width;
+        final double svgNativeH = pictureInfo.size.height;
+
+        final double scale = math.min(hitboxW / svgNativeW, hitboxH / svgNativeH);
+        final double drawW = svgNativeW * scale;
+        final double drawH = svgNativeH * scale;
+        final double drawLeft = hitboxLeft + (hitboxW - drawW) / 2;
+        final double drawTop = hitboxTop + (hitboxH - drawH) / 2;
+
+        canvas.save();
+        canvas.translate(drawLeft + _svgCorrectionX, drawTop + _svgCorrectionY);
+        canvas.scale(scale);
+
+        canvas.drawPicture(pictureInfo.picture);
+
+        final double opacity = (coverage / 100.0) * 0.8;
+        canvas.saveLayer(
+          Rect.fromLTWH(0, 0, svgNativeW, svgNativeH),
+          Paint()..blendMode = BlendMode.srcATop,
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(0, 0, svgNativeW, svgNativeH),
+          Paint()..color = diseaseColor.withValues(alpha: opacity),
+        );
+        canvas.restore();
+
+        //TODO: Disegna anche i tratti dell'utente se presenti
+        final points = _diseasePoints[_selectedDisease]?[region] ?? [];
+        final renderInfo = _regionRenderInfo[_selectedDisease]?[region];
+        if (points.isNotEmpty && renderInfo != null) {
+          final double svgImgW = (renderInfo['svgWidth'] as num).toDouble();
+          final double svgImgH = (renderInfo['svgHeight'] as num).toDouble();
+          final double canvasW2 = (renderInfo['canvasWidth'] as num).toDouble();
+          final double canvasH2 = (renderInfo['canvasHeight'] as num).toDouble();
+
+          if (svgImgW > 0 && svgImgH > 0 && canvasW2 > 0 && canvasH2 > 0) {
+            final double fitScale = math.min(canvasW2 / svgImgW, canvasH2 / svgImgH);
+            final double dx = (canvasW2 - svgImgW * fitScale) / 2;
+            final double dy = (canvasH2 - svgImgH * fitScale) / 2;
+
+            canvas.saveLayer(
+              Rect.fromLTWH(0, 0, svgNativeW, svgNativeH),
+              Paint()..blendMode = BlendMode.srcATop,
+            );
+
+            final Color strokeColor = diseaseColor;
+            for (int i = 0; i < points.length - 1; i++) {
+              final p = points[i];
+              final nextP = points[i + 1];
+              if (p != null && nextP != null) {
+                final double x1 = (p.offset.dx - dx) / fitScale;
+                final double y1 = (p.offset.dy - dy) / fitScale;
+                final double x2 = (nextP.offset.dx - dx) / fitScale;
+                final double y2 = (nextP.offset.dy - dy) / fitScale;
+
+                final Paint strokePaint = Paint()
+                  ..color = p.isEraser ? const Color(0x00000000) : strokeColor.withValues(alpha: 0.75)
+                  ..strokeWidth = p.strokeWidth / fitScale
+                  ..strokeCap = StrokeCap.round
+                  ..isAntiAlias = true
+                  ..style = PaintingStyle.stroke;
+                if (p.isEraser) strokePaint.blendMode = BlendMode.clear;
+
+                canvas.drawLine(Offset(x1, y1), Offset(x2, y2), strokePaint);
+              } else if (p != null) {
+                final double x1 = (p.offset.dx - dx) / fitScale;
+                final double y1 = (p.offset.dy - dy) / fitScale;
+
+                final Paint strokePaint = Paint()
+                  ..color = p.isEraser ? const Color(0x00000000) : strokeColor.withValues(alpha: 0.75)
+                  ..strokeWidth = p.strokeWidth / fitScale
+                  ..strokeCap = StrokeCap.round
+                  ..isAntiAlias = true
+                  ..style = PaintingStyle.stroke;
+                if (p.isEraser) strokePaint.blendMode = BlendMode.clear;
+
+                canvas.drawPoints(ui.PointMode.points, [Offset(x1, y1)], strokePaint);
+              }
+            }
+            canvas.restore();
+          }
+        }
+
+        canvas.restore();
+        pictureInfo.picture.dispose();
+      }
+
+      // Generazione immagine finale
+      final ui.Image resultImage = await recorder.endRecording().toImage(canvasW, canvasH);
+      bodyImage.dispose();
+      final byteData = await resultImage.toByteData(format: ui.ImageByteFormat.png);
+      resultImage.dispose();
+      debugPrint('PDF: rendered body view (${byteData!.lengthInBytes} bytes)');
+      return byteData.buffer.asUint8List();
+    } catch (e, stack) {
+      debugPrint('PDF: ERRORE rendering corpo: $e\\n$stack');
+      return null;
+    }
+  }
+
+  Future<pw.Document> _buildPdfReport() async {
     final pdf = pw.Document();
     final currentCoverages = _diseaseCoverages[_selectedDisease] ?? {};
     final breakdown = BsaCalculator.calculateBreakdown(currentCoverages);
 
+    // Rendering immagini composite (corpo con sagome SVG colorate)
+    final frontRendered = await _renderBodyPreviewForPdf(true);
+    final backRendered = await _renderBodyPreviewForPdf(false);
+
     pdf.addPage(
-      pw.Page(
-        build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(48),
+        build: (pw.Context context) => [
+          pw.Header(level: 0, child: pw.Text('Report Valutazione BSA - $_selectedDisease')),
+          pw.SizedBox(height: 16),
+          pw.Text('Data: ${DateTime.now().toString().split('.')[0]}'),
+          pw.SizedBox(height: 16),
+          pw.TableHelper.fromTextArray(
+            headers: ['Regione', 'BSA (%)'],
+            data: breakdown.entries.map((e) => [e.key, '${e.value.toStringAsFixed(2)} %']).toList(),
+          ),
+          pw.SizedBox(height: 16),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Header(level: 0, child: pw.Text('Report Valutazione BSA - $_selectedDisease')),
-              pw.SizedBox(height: 20),
-              pw.Text('Data: ${DateTime.now().toString().split('.')[0]}'),
-              pw.SizedBox(height: 20),
-              pw.TableHelper.fromTextArray(
-                headers: ['Regione', 'BSA (%)'],
-                data: breakdown.entries.map((e) => [e.key, '${e.value.toStringAsFixed(2)} %']).toList(),
-              ),
-              pw.SizedBox(height: 20),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text('BSA Totale Stimata:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18)),
-                  pw.Text('${_totalBsa.toStringAsFixed(2)} %', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18)),
-                ],
-              ),
-              pw.SizedBox(height: 40),
-              pw.Divider(),
-              pw.Text(
-                'Disclaimer: Il BSA rappresenta esclusivamente la percentuale stimata di superficie corporea interessata e non sostituisce una valutazione dermatologica.',
-                style: const pw.TextStyle(fontSize: 10),
-              ),
-              pw.Text(
-                'L\'app non richiede registrazione e non memorizza dati personali o risultati delle valutazioni.',
-                style: const pw.TextStyle(fontSize: 10),
-              ),
+              pw.Text('BSA Totale Stimata:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
+              pw.Text('${_totalBsa.toStringAsFixed(2)} %', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
             ],
-          );
-        },
+          ),
+          // Immagini composite del corpo con sagome colorate
+          if (frontRendered != null || backRendered != null) ...[
+            pw.SizedBox(height: 16),
+            pw.Divider(),
+            pw.Header(level: 1, child: pw.Text('Rappresentazione visiva')),
+            pw.SizedBox(height: 8),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.center,
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                if (frontRendered != null)
+                  pw.Column(
+                    mainAxisSize: pw.MainAxisSize.min,
+                    children: [
+                      pw.Text('Vista anteriore',
+                          style: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11)),
+                      pw.SizedBox(height: 4),
+                      pw.SizedBox(
+                        width: 180,
+                        height: 180 / 0.45,
+                        child: pw.Image(pw.MemoryImage(frontRendered), fit: pw.BoxFit.contain),
+                      ),
+                    ],
+                  ),
+                if (frontRendered != null && backRendered != null)
+                  pw.SizedBox(width: 16),
+                if (backRendered != null)
+                  pw.Column(
+                    mainAxisSize: pw.MainAxisSize.min,
+                    children: [
+                      pw.Text('Vista posteriore',
+                          style: const pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11)),
+                      pw.SizedBox(height: 4),
+                      pw.SizedBox(
+                        width: 180,
+                        height: 180 / 0.45,
+                        child: pw.Image(pw.MemoryImage(backRendered), fit: pw.BoxFit.contain),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+          pw.SizedBox(height: 30),
+          pw.Divider(),
+          pw.SizedBox(height: 8),
+          pw.Text(
+            'Disclaimer: Il BSA rappresenta esclusivamente la percentuale stimata di superficie corporea interessata e non sostituisce una valutazione dermatologica.',
+            style: const pw.TextStyle(fontSize: 9),
+          ),
+          pw.Text(
+            "L'app non richiede registrazione e non memorizza dati personali o risultati delle valutazioni.",
+            style: const pw.TextStyle(fontSize: 9),
+          ),
+        ],
       ),
     );
     return pdf;
   }
 
   Future<void> _handlePdfAction(bool isShare) async {
-    final pdf = _buildPdfReport();
+    final pdf = await _buildPdfReport();
     final filename = 'report_bsa_${_selectedDisease.replaceAll(' ', '_')}.pdf';
 
     if (isShare) {
@@ -548,6 +817,12 @@ class _InteractiveMapperScreenState extends State<InteractiveMapperScreen> {
       setState(() {
         _diseaseCoverages[_selectedDisease]![region] = result['coverage'] as double;
         _diseasePoints[_selectedDisease]![region] = result['points'] as List<DrawingPoint?>;
+        _regionRenderInfo[_selectedDisease]![region] = {
+          'svgWidth': (result['svgWidth'] as num).toDouble(),
+          'svgHeight': (result['svgHeight'] as num).toDouble(),
+          'canvasWidth': (result['canvasWidth'] as num).toDouble(),
+          'canvasHeight': (result['canvasHeight'] as num).toDouble(),
+        };
       });
     }
   }
