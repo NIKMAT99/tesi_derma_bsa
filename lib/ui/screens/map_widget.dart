@@ -73,9 +73,6 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
 
     setState(() {
       _isLoadingCenters = true;
-      if (forceRefresh) {
-        _centers = [];
-      }
     });
 
     try {
@@ -91,12 +88,38 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
         });
         _preloadOtherDisease();
         _updateVisibleCenters();
+      } else {
+        _restoreCentersFromCacheOrKeep();
+        _showFetchError();
       }
     } catch (e) {
       debugPrint("Error fetching centers: $e");
+      _restoreCentersFromCacheOrKeep();
+      _showFetchError();
     } finally {
       if (mounted) setState(() => _isLoadingCenters = false);
     }
+  }
+
+  // Ripristina i centri dalla cache se disponibili
+  void _restoreCentersFromCacheOrKeep() {
+    final cached = _centersCache[_selectedDisease];
+    if (cached != null && cached.isNotEmpty && _centers.isEmpty) {
+      setState(() {
+        _centers = cached;
+      });
+      _updateVisibleCenters();
+    }
+  }
+
+  void _showFetchError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Errore durante il caricamento dei centri. Riprova."),
+        duration: Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _preloadOtherDisease() async {
@@ -115,20 +138,24 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
 
   Future<List<dynamic>?> _fetchCentersForDisease(String disease) async {
     if (disease == 'Psoriasi') {
-      final response = await http.get(
-        Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'),
-        // User-Agent tipo browser, per evitare blocchi
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                  '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          'Accept': 'application/json',
-        },
-      );
+      final response = await http
+          .get(
+            Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'),
+            // User-Agent tipo browser, per evitare blocchi
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 20));
       if (response.statusCode == 200) {
         // Il body arriva con BOM UTF-8 iniziale... non json.encode utilizzabile...
         final String body = _decodeUtf8Body(response);
-        final List<dynamic> allMarkers = json.decode(body);
+        final dynamic decoded = json.decode(body);
+        if (decoded is! List) return null;
+        final List<dynamic> allMarkers = decoded;
         return allMarkers.where((m) {
           final mapId = m['map_id']?.toString();
           final category = m['category']?.toString() ?? '';
@@ -148,7 +175,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       }
     } else {
       // Dermatite Atopica
-      final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
+      final response = await http
+          .get(Uri.parse('https://centri.dermatopia.it/public-center'))
+          .timeout(const Duration(seconds: 20));
       if (response.statusCode == 200) {
         final String body = _decodeUtf8Body(response);
         final decoded = json.decode(body);
