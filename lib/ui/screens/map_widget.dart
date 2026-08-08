@@ -20,6 +20,11 @@ class DermatogistsMapWidget extends StatefulWidget {
 
 class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     with AutomaticKeepAliveClientMixin {
+  // Raggio iniziale
+  static const double _initialRadiusKm = 100.0;
+  static const double _boundsPaddingFactor = 0.5;
+  static const double _initialZoom = 9.0;
+
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   bool _isSearching = false;
@@ -28,7 +33,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
 
   String _selectedDisease = 'Dermatite Atopica';
   List<dynamic> _centers = [];
+  List<dynamic> _visibleCenters = [];
   bool _isLoadingCenters = false;
+  bool _mapReady = false;
   final Map<String, List<dynamic>> _centersCache = {};
 
   @override
@@ -60,6 +67,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
         _centers = _centersCache[_selectedDisease]!;
       });
       _preloadOtherDisease();
+      _updateVisibleCenters();
       return;
     }
 
@@ -76,8 +84,13 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
         _centersCache[_selectedDisease] = centers;
         setState(() {
           _centers = centers;
+          // Primo caricamento
+          if (!_mapReady) {
+            _visibleCenters = _centersWithinInitialRadius();
+          }
         });
         _preloadOtherDisease();
+        _updateVisibleCenters();
       }
     } catch (e) {
       debugPrint("Error fetching centers: $e");
@@ -102,9 +115,20 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
 
   Future<List<dynamic>?> _fetchCentersForDisease(String disease) async {
     if (disease == 'Psoriasi') {
-      final response = await http.get(Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'));
+      final response = await http.get(
+        Uri.parse('https://www.vicinidipelle.it/wp-json/wpgmza/v1/markers?map_id=4'),
+        // User-Agent tipo browser, per evitare blocchi
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+        },
+      );
       if (response.statusCode == 200) {
-        final List<dynamic> allMarkers = json.decode(response.body);
+        // Il body arriva con BOM UTF-8 iniziale... non json.encode utilizzabile...
+        final String body = _decodeUtf8Body(response);
+        final List<dynamic> allMarkers = json.decode(body);
         return allMarkers.where((m) {
           final mapId = m['map_id']?.toString();
           final category = m['category']?.toString() ?? '';
@@ -123,7 +147,8 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       // Dermatite Atopica
       final response = await http.get(Uri.parse('https://centri.dermatopia.it/public-center'));
       if (response.statusCode == 200) {
-        final decoded = json.decode(response.body);
+        final String body = _decodeUtf8Body(response);
+        final decoded = json.decode(body);
         if (decoded['data'] is List) {
           return List<dynamic>.from(decoded['data']);
         }
@@ -132,17 +157,106 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     return null;
   }
 
+  // Decodifica body
+  String _decodeUtf8Body(http.Response response) {
+    var body = utf8.decode(response.bodyBytes, allowMalformed: true);
+    if (body.isNotEmpty && body.codeUnitAt(0) == 0xFEFF) {
+      body = body.substring(1);
+    }
+    return body;
+  }
+
   String? _extractEmail(String html) {
-    final emailRegex = RegExp(r'mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})');
-    final match = emailRegex.firstMatch(html);
-    return match?.group(1);
+    // Trova email
+    final emailRegex = RegExp(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}');
+    final matches = emailRegex
+        .allMatches(html)
+        .map((m) => m.group(0)!)
+        .toSet()
+        .toList();
+    return matches.isEmpty ? null : matches.join(', ');
   }
 
   String? _extractPhone(String html) {
     final cleanText = html.replaceAll(RegExp(r'<[^>]*>'), ' ').trim();
-    final phoneRegex = RegExp(r'(\+?\d[\d\s\/\-]{7,})');
-    final match = phoneRegex.firstMatch(cleanText);
-    return match?.group(1)?.trim();
+    final phoneRegex = RegExp(r'\+?\d[\d\s\/\-\.\(\)]{7,}');
+    final matches = phoneRegex
+        .allMatches(cleanText)
+        .map((m) => m.group(0)!.trim())
+        // Scarta errori email
+        .where((p) =>
+            !p.contains('@') && RegExp(r'\d').allMatches(p).length >= 5)
+        .toSet()
+        .toList();
+    return matches.isEmpty ? null : matches.join(' - ');
+  }
+
+  // Converte una coordinata in double, (spesso l'API ritorna valori errati)
+  double? _parseCoordinate(dynamic value) {
+    if (value == null) return null;
+    var s = value.toString().trim();
+    if (s.isEmpty) return null;
+    final parts = s.split('.');
+    if (parts.length > 2) {
+      s = '${parts.first}.${parts.skip(1).join()}';
+    }
+    return double.tryParse(s);
+  }
+
+  // Aggiorna la lista dei centri mostrati sulla mappa
+  void _updateVisibleCenters() {
+    if (!_mapReady) return;
+    final camera = _mapController.camera;
+    final bounds = camera.visibleBounds;
+
+    final latPad = (bounds.north - bounds.south) * _boundsPaddingFactor;
+    final lonPad = (bounds.east - bounds.west) * _boundsPaddingFactor;
+
+    final visible = _centers.where((derm) {
+      final lat = _parseCoordinate(derm['lat']);
+      final lon = _parseCoordinate(derm['lon'] ?? derm['lng']);
+      if (lat == null || lon == null) return false;
+      return lat >= bounds.south - latPad &&
+          lat <= bounds.north + latPad &&
+          lon >= bounds.west - lonPad &&
+          lon <= bounds.east + lonPad;
+    }).toList();
+
+    if (_sameCenters(_visibleCenters, visible)) return;
+    if (mounted) {
+      setState(() => _visibleCenters = visible);
+    } else {
+      _visibleCenters = visible;
+    }
+  }
+
+  // Fusione delle liste (in pratica molti centri di dermatite fanno anche psoriasi
+  // quindi standardizziamo i dati
+  bool _sameCenters(List<dynamic> a, List<dynamic> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  // Filtra centri nel raggio
+  List<dynamic> _centersWithinInitialRadius() {
+    final LatLng center = widget.currentPosition != null
+        ? LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude)
+        : const LatLng(41.9028, 12.4964);
+    const Distance distance = Distance();
+    return _centers.where((derm) {
+      final lat = _parseCoordinate(derm['lat']);
+      final lon = _parseCoordinate(derm['lon'] ?? derm['lng']);
+      if (lat == null || lon == null) return false;
+      final km = distance.as(
+        LengthUnit.Kilometer,
+        center,
+        LatLng(lat, lon),
+      );
+      return km <= _initialRadiusKm;
+    }).toList();
   }
 
   void _showPositionWarning() {
@@ -198,6 +312,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
           final lat = double.parse(data[0]['lat']);
           final lon = double.parse(data[0]['lon']);
           _mapController.move(LatLng(lat, lon), 14.0);
+          _updateVisibleCenters();
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -259,15 +374,18 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       _suggestions = [];
     });
     _mapController.move(LatLng(lat, lon), 15.0);
+    _updateVisibleCenters();
     FocusScope.of(context).unfocus();
   }
 
   void _zoomIn() {
     _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1);
+    _updateVisibleCenters();
   }
 
   void _zoomOut() {
     _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1);
+    _updateVisibleCenters();
   }
 
   void _moveToCurrentPosition() {
@@ -276,6 +394,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
         LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude),
         15.0,
       );
+      _updateVisibleCenters();
     } else {
       _showPositionWarning();
     }
@@ -296,7 +415,22 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
             mapController: _mapController,
             options: MapOptions(
               initialCenter: initialCenter,
-              initialZoom: widget.currentPosition != null ? 13.0 : 6.0,
+              // Zoom iniziale
+              initialZoom: _initialZoom,
+              onMapReady: () {
+                _mapReady = true;
+                _updateVisibleCenters();
+              },
+              onMapEvent: (event) {
+                // Ricarica centri visibili
+                if (event is MapEventMoveEnd ||
+                    event is MapEventFlingAnimationEnd ||
+                    event is MapEventDoubleTapZoomEnd ||
+                    event is MapEventScrollWheelZoom ||
+                    event is MapEventRotateEnd) {
+                  _updateVisibleCenters();
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -304,9 +438,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                 userAgentPackageName: 'com.example.tesi_derma_bsa',
               ),
               MarkerLayer(
-                markers: _centers.map((derm) {
-                  double? lat = double.tryParse(derm['lat']?.toString() ?? '');
-                  double? lon = double.tryParse(derm['lon']?.toString() ?? derm['lng']?.toString() ?? '');
+                markers: _visibleCenters.map((derm) {
+                  double? lat = _parseCoordinate(derm['lat']);
+                  double? lon = _parseCoordinate(derm['lon'] ?? derm['lng']);
 
                   if (lat == null || lon == null) return const Marker(point: LatLng(0,0), child: SizedBox());
 
