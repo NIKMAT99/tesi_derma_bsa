@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class DermatogistsMapWidget extends StatefulWidget {
   final String initialDisease;
@@ -24,6 +25,12 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   static const double _initialRadiusKm = 100.0;
   static const double _boundsPaddingFactor = 0.5;
   static const double _initialZoom = 9.0;
+
+  // Timeout
+  static const Duration _networkTimeout = Duration(seconds: 45);
+
+  // Chiave (shared_preferences) persistenza dati cache
+  static const String _centersCachePrefix = 'centers_cache_';
 
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
@@ -52,13 +59,43 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
   void initState() {
     super.initState();
     _selectedDisease = widget.initialDisease;
-    _fetchCenters();
+    _loadPersistedCentersThenFetch();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.currentPosition == null) {
         _showPositionWarning();
       }
     });
+  }
+
+  // Carica la cache persistente dei centri (se presente) e poi avvia il fetch
+  Future<void> _loadPersistedCentersThenFetch() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final disease in const ['Psoriasi', 'Dermatite Atopica']) {
+        final raw = prefs.getString('$_centersCachePrefix$disease');
+        if (raw != null && raw.isNotEmpty) {
+          final decoded = json.decode(raw);
+          if (decoded is List) {
+            _centersCache[disease] = List<dynamic>.from(decoded);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Errore caricamento cache persistente: $e');
+    }
+    if (mounted) _fetchCenters();
+  }
+
+  // Salva la lista dei centri su disco (shared_preferences)
+  Future<void> _persistCenters(String disease, List<dynamic> centers) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          '$_centersCachePrefix$disease', json.encode(centers));
+    } catch (e) {
+      debugPrint('Errore salvataggio cache persistente: $e');
+    }
   }
 
   Future<void> _fetchCenters({bool forceRefresh = false}) async {
@@ -79,6 +116,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       final centers = await _fetchCentersForDisease(_selectedDisease);
       if (centers != null) {
         _centersCache[_selectedDisease] = centers;
+        _persistCenters(_selectedDisease, centers);
         setState(() {
           _centers = centers;
           // Primo caricamento
@@ -129,6 +167,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
         final centers = await _fetchCentersForDisease(otherDisease);
         if (centers != null) {
           _centersCache[otherDisease] = centers;
+          _persistCenters(otherDisease, centers);
         }
       } catch (e) {
         debugPrint("Error preloading centers: $e");
@@ -149,7 +188,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
               'Accept': 'application/json',
             },
           )
-          .timeout(const Duration(seconds: 20));
+          .timeout(_networkTimeout);
       if (response.statusCode == 200) {
         // Il body arriva con BOM UTF-8 iniziale... non json.encode utilizzabile...
         final String body = _decodeUtf8Body(response);
@@ -177,7 +216,7 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
       // Dermatite Atopica
       final response = await http
           .get(Uri.parse('https://centri.dermatopia.it/public-center'))
-          .timeout(const Duration(seconds: 20));
+          .timeout(_networkTimeout);
       if (response.statusCode == 200) {
         final String body = _decodeUtf8Body(response);
         final decoded = json.decode(body);
@@ -651,8 +690,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
               ],
             ),
           ),
-          // Caricamento centri
-          if (_isLoadingCenters)
+          // Caricamento centri (solo al primo caricamento, quando non ci sono
+          // ancora centri da mostrare: durante il refresh la mappa resta visibile)
+          if (_isLoadingCenters && _centers.isEmpty)
             const Center(child: CircularProgressIndicator()),
         ],
       ),
