@@ -206,6 +206,11 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
     return double.tryParse(s);
   }
 
+  // Colore del marker in base alla patologia selezionata
+  Color _markerColorForDisease(String disease) {
+    return disease == 'Psoriasi' ? Colors.redAccent : Colors.orangeAccent;
+  }
+
   // Aggiorna la lista dei centri mostrati sulla mappa
   void _updateVisibleCenters() {
     if (!_mapReady) return;
@@ -453,9 +458,9 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
                     height: 50,
                     child: GestureDetector(
                       onTap: () => _showDermatologistPopup(derm),
-                      child: const Icon(
+                      child: Icon(
                         Icons.location_on,
-                        color: Colors.redAccent,
+                        color: _markerColorForDisease(_selectedDisease),
                         size: 40,
                       ),
                     ),
