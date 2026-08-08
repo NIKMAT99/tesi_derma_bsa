@@ -133,7 +133,10 @@ class DermatogistsMapWidgetState extends State<DermatogistsMapWidget>
           final mapId = m['map_id']?.toString();
           final category = m['category']?.toString() ?? '';
           final categories = category.split(',').map((e) => e.trim()).toList();
-          return mapId == '4' && categories.contains('4');
+          // Categoria 1: "Centri psoriasi/artrite psoriasica"
+          // Categoria 4: "Centri dermatite atopica"
+          // Usiamo solamente 1
+          return mapId == '4' && categories.contains('1');
         }).map((m) {
           final desc = m['description']?.toString() ?? '';
           if (desc.isNotEmpty) {
